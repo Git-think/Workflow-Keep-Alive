@@ -8,29 +8,20 @@ on:
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Git
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
       - name: Keep repositories alive
         env:
-          # JSON 格式: {"user1": "pat_for_user1", "user2": "pat_for_user2"}
           KEEP_ALIVE_PATS: ${{ secrets.KEEP_ALIVE_PATS }}
-          
-          # **NEW**: Read from secrets first for privacy
           EXTRA_REPOS_SECRET: ${{ secrets.REPOSITORIES_TO_KEEP_ALIVE }}
-          # **NEW**: Fallback to variables if secret is not set
           EXTRA_REPOS_VAR: ${{ vars.REPOSITORIES_TO_KEEP_ALIVE }}
-          
-          # 当前仓库
           SELF_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # **NEW**: Determine which repository list to use (Secret > Variable)
           if [ -n "$EXTRA_REPOS_SECRET" ]; then
             EXTRA_REPOS="$EXTRA_REPOS_SECRET"
             echo "Using repository list from Secrets."
@@ -39,11 +30,10 @@ jobs:
             echo "Using repository list from Variables."
           fi
 
-          # 合并仓库列表，去重
           ALL_REPOS=$(echo "$SELF_REPO,$EXTRA_REPOS" | tr -d ' ' | tr ',' '\n' | sort -u)
           
-          if [ -z "$KEEP_ALIVE_PATS" ]; then
-            echo "Error: KEEP_ALIVE_PATS secret is not set."
+          if [ -n "$EXTRA_REPOS" ] && [ -z "$KEEP_ALIVE_PATS" ]; then
+            echo "Error: External repositories are configured, but KEEP_ALIVE_PATS secret is not set."
             exit 1
           fi
 
@@ -60,29 +50,40 @@ jobs:
           )
 
           for REPO in $ALL_REPOS; do
-            if [ -z "$REPO" ]; then
-              continue
-            fi
-
+            if [ -z "$REPO" ]; then continue; fi
             echo ""
             echo "Processing repository: $REPO"
             
             USER=$(echo "$REPO" | cut -d'/' -f1)
-            PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".\"${USER}\"")
+            CLONE_URL=""
 
-            if [ "$PAT" == "null" ] || [ -z "$PAT" ]; then
-              echo "Warning: No PAT found for user '$USER'. Skipping $REPO."
-              continue
+            if [ "$REPO" == "$SELF_REPO" ]; then
+              echo "Using GITHUB_TOKEN for self-repository."
+              CLONE_URL="https://x-access-token:$GH_TOKEN@github.com/$REPO.git"
+            else
+              echo "Using PAT for external repository."
+              PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".\"${USER}\"")
+
+              if [ "$PAT" == "null" ] || [ -z "$PAT" ]; then
+                echo "Warning: No PAT found for user '$USER'. Skipping $REPO."
+                continue
+              fi
+              CLONE_URL="https://$USER:$PAT@github.com/$REPO.git"
             fi
 
-            git clone "https://$USER:$PAT@github.com/$REPO.git" temp_repo &>/dev/null
+            git clone "$CLONE_URL" temp_repo &>/dev/null
             if [ $? -ne 0 ]; then
-              echo "Error: Failed to clone $REPO."
+              echo "Error: Failed to clone $REPO. Check permissions and repository path."
               continue
             fi
             
             cd temp_repo
             
+            # **NEW**: Dynamically set commit author to the repository owner
+            echo "Configuring Git user as $USER"
+            git config user.name "$USER"
+            git config user.email "$USER@users.noreply.github.com"
+
             RANDOM_INDEX=$((RANDOM % ${#COMMIT_MESSAGES[@]}))
             COMMIT_MESSAGE=${COMMIT_MESSAGES[$RANDOM_INDEX]}
             
