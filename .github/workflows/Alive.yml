@@ -58,7 +58,8 @@ jobs:
             echo "Processing repository: $REPO"
             
             USER=$(echo "$REPO" | cut -d'/' -f1)
-            PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".${USER}")
+            # **FIX**: Quote the username in the jq query to handle special characters like hyphens.
+            PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".\"${USER}\"")
 
             if [ "$PAT" == "null" ] || [ -z "$PAT" ]; then
               echo "Warning: No PAT found for user '$USER'. Skipping $REPO."
