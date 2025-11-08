@@ -22,12 +22,23 @@ jobs:
           # JSON 格式: {"user1": "pat_for_user1", "user2": "pat_for_user2"}
           KEEP_ALIVE_PATS: ${{ secrets.KEEP_ALIVE_PATS }}
           
-          # 逗号分隔的仓库列表: user1/repo1,user2/repo2
-          EXTRA_REPOS: ${{ vars.REPOSITORIES_TO_KEEP_ALIVE }}
+          # **NEW**: Read from secrets first for privacy
+          EXTRA_REPOS_SECRET: ${{ secrets.REPOSITORIES_TO_KEEP_ALIVE }}
+          # **NEW**: Fallback to variables if secret is not set
+          EXTRA_REPOS_VAR: ${{ vars.REPOSITORIES_TO_KEEP_ALIVE }}
           
           # 当前仓库
           SELF_REPO: ${{ github.repository }}
         run: |
+          # **NEW**: Determine which repository list to use (Secret > Variable)
+          if [ -n "$EXTRA_REPOS_SECRET" ]; then
+            EXTRA_REPOS="$EXTRA_REPOS_SECRET"
+            echo "Using repository list from Secrets."
+          else
+            EXTRA_REPOS="$EXTRA_REPOS_VAR"
+            echo "Using repository list from Variables."
+          fi
+
           # 合并仓库列表，去重
           ALL_REPOS=$(echo "$SELF_REPO,$EXTRA_REPOS" | tr -d ' ' | tr ',' '\n' | sort -u)
           
@@ -40,7 +51,6 @@ jobs:
           echo "$ALL_REPOS"
           echo "-------------------------------"
 
-          # 定义一组自然的提交信息
           COMMIT_MESSAGES=(
             "chore: routine maintenance"
             "ci: trigger periodic build"
@@ -58,7 +68,6 @@ jobs:
             echo "Processing repository: $REPO"
             
             USER=$(echo "$REPO" | cut -d'/' -f1)
-            # **FIX**: Quote the username in the jq query to handle special characters like hyphens.
             PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".\"${USER}\"")
 
             if [ "$PAT" == "null" ] || [ -z "$PAT" ]; then
@@ -74,13 +83,11 @@ jobs:
             
             cd temp_repo
             
-            # 随机选择一条提交信息
             RANDOM_INDEX=$((RANDOM % ${#COMMIT_MESSAGES[@]}))
             COMMIT_MESSAGE=${COMMIT_MESSAGES[$RANDOM_INDEX]}
             
             echo "Using commit message: '$COMMIT_MESSAGE'"
             
-            # 创建一个带有随机信息的空提交
             git commit --allow-empty -m "$COMMIT_MESSAGE"
             git push &>/dev/null
 
