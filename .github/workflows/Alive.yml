@@ -1,0 +1,94 @@
+name: Keep Repositories Alive
+
+on:
+  workflow_dispatch: # 允许手动触发
+  schedule:
+    - cron: '0 0 */28 * *' # 每 28 天运行一次
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Keep repositories alive
+        env:
+          # JSON 格式: {"user1": "pat_for_user1", "user2": "pat_for_user2"}
+          KEEP_ALIVE_PATS: ${{ secrets.KEEP_ALIVE_PATS }}
+          
+          # 逗号分隔的仓库列表: user1/repo1,user2/repo2
+          EXTRA_REPOS: ${{ vars.REPOSITORIES_TO_KEEP_ALIVE }}
+          
+          # 当前仓库
+          SELF_REPO: ${{ github.repository }}
+        run: |
+          # 合并仓库列表，去重
+          ALL_REPOS=$(echo "$SELF_REPO,$EXTRA_REPOS" | tr -d ' ' | tr ',' '\n' | sort -u)
+          
+          if [ -z "$KEEP_ALIVE_PATS" ]; then
+            echo "Error: KEEP_ALIVE_PATS secret is not set."
+            exit 1
+          fi
+
+          echo "--- Repositories to process ---"
+          echo "$ALL_REPOS"
+          echo "-------------------------------"
+
+          # 定义一组自然的提交信息
+          COMMIT_MESSAGES=(
+            "chore: routine maintenance"
+            "ci: trigger periodic build"
+            "docs: sync with latest changes"
+            "style: apply automated formatting"
+            "refactor: minor adjustments"
+          )
+
+          for REPO in $ALL_REPOS; do
+            if [ -z "$REPO" ]; then
+              continue
+            fi
+
+            echo ""
+            echo "Processing repository: $REPO"
+            
+            USER=$(echo "$REPO" | cut -d'/' -f1)
+            PAT=$(echo "$KEEP_ALIVE_PATS" | jq -r ".${USER}")
+
+            if [ "$PAT" == "null" ] || [ -z "$PAT" ]; then
+              echo "Warning: No PAT found for user '$USER'. Skipping $REPO."
+              continue
+            fi
+
+            git clone "https://$USER:$PAT@github.com/$REPO.git" temp_repo &>/dev/null
+            if [ $? -ne 0 ]; then
+              echo "Error: Failed to clone $REPO."
+              continue
+            fi
+            
+            cd temp_repo
+            
+            # 随机选择一条提交信息
+            RANDOM_INDEX=$((RANDOM % ${#COMMIT_MESSAGES[@]}))
+            COMMIT_MESSAGE=${COMMIT_MESSAGES[$RANDOM_INDEX]}
+            
+            echo "Using commit message: '$COMMIT_MESSAGE'"
+            
+            # 创建一个带有随机信息的空提交
+            git commit --allow-empty -m "$COMMIT_MESSAGE"
+            git push &>/dev/null
+
+            if [ $? -eq 0 ]; then
+              echo "Successfully pushed keep-alive commit to $REPO"
+            else
+              echo "Error: Failed to push to $REPO."
+            fi
+            
+            cd ..
+            rm -rf temp_repo
+          done
